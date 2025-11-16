@@ -1,0 +1,27 @@
+###############################
+# Driver Fatigue Detection    #
+# Classic vs AI - Requirements#
+###############################
+
+# Core
+numpy>=1.21.0
+pandas>=1.3.0
+
+# Computer vision
+opencv-python>=4.8.0
+mediapipe>=0.10.0
+
+# Deep learning (AI models)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Image utilities
+Pillow>=8.3.0
+
+# Progress bars (dataset preprocessing / training)
+tqdm>=4.60.0
+
+# Optional: plotting & analysis (not requerido para la demo en vivo)
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
