@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn.functional as F
 from torchvision import transforms
@@ -11,6 +12,12 @@ from src.models.mobilenet_fatigue import build_model
 class YawnInfer:
     def __init__(self, model_path="models/yawn_cnn.pt", device=None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                f"[YawnInfer] No se encontró el modelo '{model_path}'. "
+                "Entrena el modelo ejecutando src/ai/train_yawn.py o coloca el .pt en la carpeta models."
+            )
 
         # === modelo ===
         self.model = build_model(num_classes=2)

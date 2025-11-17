@@ -6,6 +6,7 @@ import time
 from src.ai.infer_eye import EyeInfer
 from src.ai.infer_yawn import YawnInfer
 from src.ai.infer_drowsy import DrowsyInfer
+from src.classic.config import LEFT_EYE as LEFT_EYE_LM, RIGHT_EYE as RIGHT_EYE_LM, MOUTH as MOUTH_LM  # asegurar mismos landmarks que en classic
 
 
 # -------------------------------
@@ -51,10 +52,14 @@ def crop_region(frame, lm, points, margin=10):
 # -------------------------------
 # Regiones (landmarks MediaPipe)
 # -------------------------------
-LEFT_EYE = [33, 160, 158, 153, 144, 145, 163]
-RIGHT_EYE = [263, 387, 385, 380, 373, 374, 390]
-MOUTH = [61, 291, 0, 17, 78, 308, 13, 14]
+# Usamos los mismos índices que en classic.config para mantener consistencia
+LEFT_EYE = LEFT_EYE_LM
+RIGHT_EYE = RIGHT_EYE_LM
+MOUTH = MOUTH_LM
 FACE = list(range(0, 468))  # cara completa
+
+# Saltar inferencias en algunos frames para ahorrar CPU/GPU
+SKIP_FRAMES_AI = 1  # 0 = inferir cada frame, 1 = uno sí/uno no, 2 = 1 de cada 3, etc.
 
 
 # -------------------------------
@@ -77,6 +82,7 @@ def main():
         return
 
     fps_time = time.time()
+    frame_idx = 0
 
     while True:
         ret, frame = cap.read()
@@ -90,7 +96,11 @@ def main():
         yawn_prob = None      # prob bostezo
         drowsy_prob = None    # prob somnolencia global
 
-        if res.multi_face_landmarks:
+    # Control de frecuencia de inferencia para ahorrar recursos
+        do_infer = (SKIP_FRAMES_AI <= 0) or (frame_idx % (SKIP_FRAMES_AI + 1) == 0)
+        frame_idx += 1
+
+        if res.multi_face_landmarks and do_infer:
             lm = res.multi_face_landmarks[0]
 
             # ===== Recortes =====
@@ -100,20 +110,22 @@ def main():
             face_crop = crop_region(frame, lm, FACE, margin=20)
 
             # ===== IA: ojos =====
-            if left_eye_crop is not None and right_eye_crop is not None:
-                combined = np.hstack((left_eye_crop, right_eye_crop))
-                prob_closed = eye_infer.predict(combined)  # ← devuelve float
+            # Usamos solo un ojo (por ejemplo el izquierdo) para alinearlo con el entrenamiento,
+            # donde cada imagen contiene una región de ojos y no una concatenación artificial.
+            eye_crop = left_eye_crop if left_eye_crop is not None else right_eye_crop
+            if eye_crop is not None and eye_crop.size > 0:
+                prob_closed = eye_infer.predict(eye_crop)  # devuelve float
                 if prob_closed is not None:
                     eye_prob = float(prob_closed)
 
             # ===== IA: bostezo =====
-            if mouth_crop is not None:
+            if mouth_crop is not None and mouth_crop.size > 0:
                 prob_yawn, _ = yawn_infer.predict(mouth_crop)  # ← (prob, clase)
                 if prob_yawn is not None:
                     yawn_prob = float(prob_yawn)
 
             # ===== IA: drowsy global =====
-            if face_crop is not None:
+            if face_crop is not None and face_crop.size > 0:
                 pred_d = drowsy_infer.predict(face_crop)  # {"alert": x, "drowsy": y}
                 if pred_d is not None:
                     drowsy_prob = float(pred_d["drowsy"])

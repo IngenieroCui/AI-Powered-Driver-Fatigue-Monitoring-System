@@ -1,13 +1,22 @@
+import os
 import torch
 from torchvision import transforms
 from PIL import Image
 import cv2
 from src.models.mobilenet_fatigue import build_model
 
+
 class EyeInfer:
     def __init__(self, model_path="models/eye_cnn.pt"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = build_model().to(self.device)
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                f"[EyeInfer] No se encontró el modelo '{model_path}'. "
+                "Entrena el modelo ejecutando src/ai/train_eye.py o coloca el .pt en la carpeta models."
+            )
+
+        self.model = build_model(num_classes=2).to(self.device)
         self.model.load_state_dict(torch.load(model_path, map_location=self.device))
         self.model.eval()
 

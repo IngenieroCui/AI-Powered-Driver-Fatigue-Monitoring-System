@@ -29,17 +29,29 @@ MOUTH_LEFT = 61
 MOUTH_RIGHT = 291
 
 def compute_MAR(lm, w, h):
-    top = np.array([lm.landmark[i].x * w, lm.landmark[i].y * h] for i in MOUTH_TOP)
-    bottom = np.array([lm.landmark[i].x * w, lm.landmark[i].y * h] for i in MOUTH_BOTTOM)
+    """Calcular Mouth Aspect Ratio (MAR) a partir de landmarks MediaPipe.
 
+    Se toma el promedio de los puntos superiores e inferiores de la boca y
+    se divide la distancia vertical entre ellos por la distancia horizontal
+    entre las comisuras izquierda y derecha.
+    """
+
+    # Puntos superiores e inferiores de la boca
+    top_pts = np.array([[lm.landmark[i].x * w, lm.landmark[i].y * h] for i in MOUTH_TOP])
+    bottom_pts = np.array([[lm.landmark[i].x * w, lm.landmark[i].y * h] for i in MOUTH_BOTTOM])
+
+    top = top_pts.mean(axis=0)
+    bottom = bottom_pts.mean(axis=0)
+
+    # Comisuras izquierda y derecha
     left = np.array([lm.landmark[MOUTH_LEFT].x * w, lm.landmark[MOUTH_LEFT].y * h])
     right = np.array([lm.landmark[MOUTH_RIGHT].x * w, lm.landmark[MOUTH_RIGHT].y * h])
 
-    vertical = np.linalg.norm(top.mean(axis=0) - bottom.mean(axis=0))
+    vertical = np.linalg.norm(top - bottom)
     horizontal = np.linalg.norm(left - right)
 
     if horizontal == 0:
-        return 0
+        return 0.0
     return vertical / horizontal
 
 

@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn.functional as F
 from torchvision import transforms
@@ -10,6 +11,12 @@ from src.models.mobilenet_fatigue import build_model
 class DrowsyInfer:
     def __init__(self, model_path="models/drowsy_cnn.pt", image_size=224):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                f"[DrowsyInfer] No se encontró el modelo '{model_path}'. "
+                "Entrena el modelo ejecutando src/ai/train_drowsy.py o coloca el .pt en la carpeta models."
+            )
 
         # Construir modelo
         self.model = build_model(num_classes=2).to(self.device)
