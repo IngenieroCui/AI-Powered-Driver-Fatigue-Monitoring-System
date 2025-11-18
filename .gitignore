@@ -1,1 +1,7 @@
 data/yawdd/*
+data/yawdd_frames/*
+data/cew_processed/*
+data/drowsy/*
+data/eyes_combined/*
+data/fyp_processed/*
+.venv/*

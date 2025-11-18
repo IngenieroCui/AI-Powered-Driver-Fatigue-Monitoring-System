@@ -6,7 +6,7 @@ import cv2
 import mediapipe as mp
 
 # -------- SETTINGS -------- #
-SOURCE_DIR = "cew/dataset_B_FacialImages_highResolution"
+SOURCE_DIR = "data/cew/dataset_B_FacialImages_highResolution"
 OUT_DIR = "data/cew_processed"
 TRAIN_SPLIT = 0.8
 DETECT_EYES = True   # Cambia a False si ya están bien recortadas

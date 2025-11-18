@@ -21,7 +21,8 @@ class YawnInfer:
 
         # === modelo ===
         self.model = build_model(num_classes=2)
-        self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+        state_dict = torch.load(model_path, map_location=self.device, weights_only=True)
+        self.model.load_state_dict(state_dict)
         self.model.to(self.device)
         self.model.eval()
 

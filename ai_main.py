@@ -2,6 +2,8 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import time
+import os
+import csv
 
 from src.ai.infer_eye import EyeInfer
 from src.ai.infer_yawn import YawnInfer
@@ -12,9 +14,9 @@ from src.classic.config import LEFT_EYE as LEFT_EYE_LM, RIGHT_EYE as RIGHT_EYE_L
 # -------------------------------
 # Inicializar inferencias
 # -------------------------------
-eye_infer = EyeInfer(model_path="models/eye_cnn.pt")
-yawn_infer = YawnInfer(model_path="models/yawn_cnn.pt")
-drowsy_infer = DrowsyInfer(model_path="models/drowsy_cnn.pt")
+eye_infer = EyeInfer(model_path="src/models/eye_cnn.pt")
+yawn_infer = YawnInfer(model_path="src/models/yawn_cnn.pt")
+drowsy_infer = DrowsyInfer(model_path="src/models/drowsy_cnn.pt")
 
 mp_face = mp.solutions.face_mesh.FaceMesh(
     max_num_faces=1,
@@ -22,6 +24,9 @@ mp_face = mp.solutions.face_mesh.FaceMesh(
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5
 )
+
+
+DATA_REALTIME_DIR = os.path.join("data", "realtime")
 
 
 # -------------------------------
@@ -81,8 +86,29 @@ def main():
         print("Error: No se pudo abrir la cámara")
         return
 
+    os.makedirs(DATA_REALTIME_DIR, exist_ok=True)
+
+    session_id = time.strftime("session_%Y%m%d_%H%M%S")
+    csv_path = os.path.join(DATA_REALTIME_DIR, f"{session_id}.csv")
+
+    csv_file = open(csv_path, mode="w", newline="", encoding="utf-8")
+    csv_writer = csv.writer(csv_file)
+    csv_writer.writerow([
+        "timestamp",
+        "frame_idx",
+        "eye_prob_closed",
+        "yawn_prob",
+        "drowsy_prob"
+    ])
+
     fps_time = time.time()
     frame_idx = 0
+
+    # buffers para suavizar barras (ventana de últimos N valores)
+    smooth_window = 5
+    eye_hist = []
+    yawn_hist = []
+    drowsy_hist = []
 
     while True:
         ret, frame = cap.read()
@@ -124,25 +150,79 @@ def main():
                 if prob_yawn is not None:
                     yawn_prob = float(prob_yawn)
 
-            # ===== IA: drowsy global =====
+            # ===== IA: drowsy global (solo cara) =====
             if face_crop is not None and face_crop.size > 0:
                 pred_d = drowsy_infer.predict(face_crop)  # {"alert": x, "drowsy": y}
                 if pred_d is not None:
                     drowsy_prob = float(pred_d["drowsy"])
 
+        # ===== suavizado (media móvil simple) =====
+        def update_hist(hist, value):
+            if value is None:
+                return hist
+            hist.append(value)
+            if len(hist) > smooth_window:
+                hist.pop(0)
+            return hist
+
+        eye_hist = update_hist(eye_hist, eye_prob)
+        yawn_hist = update_hist(yawn_hist, yawn_prob)
+        drowsy_hist = update_hist(drowsy_hist, drowsy_prob)
+
+        eye_smooth = np.mean(eye_hist) if eye_hist else None
+        yawn_smooth = np.mean(yawn_hist) if yawn_hist else None
+        drowsy_smooth = np.mean(drowsy_hist) if drowsy_hist else None
+
+        # ===== recalibrar para visualización =====
+        # ojo: en la práctica el modelo está dando 1 = abierto, 0 = cerrado
+        # invertimos para que la barra muestre 1 = cerrado
+        if eye_smooth is not None:
+            eye_closed_vis = 1.0 - eye_smooth
+        else:
+            eye_closed_vis = None
+
+        # bostezo: forzar a [0,1] y aplicar ligera ganancia para que sea más visible
+        def clamp01(v):
+            return max(0.0, min(1.0, float(v)))
+
+        if yawn_smooth is not None:
+            yawn_vis = clamp01(yawn_smooth * 1.2)  # hacer más sensible
+        else:
+            yawn_vis = None
+
+        # drowsy: combinamos la salida del modelo con señales de ojos y bostezo
+        # idea: si hay más bostezo y ojos cerrados, aumentar drowsy
+        base_drowsy = drowsy_smooth if drowsy_smooth is not None else 0.0
+        eye_component = eye_closed_vis if eye_closed_vis is not None else 0.0
+        yawn_component = yawn_vis if yawn_vis is not None else 0.0
+
+        # mezcla lineal simple
+        combined_drowsy = 0.5 * base_drowsy + 0.25 * eye_component + 0.25 * yawn_component
+        drowsy_vis = clamp01(combined_drowsy) if drowsy_hist else None
+
+        # ===== logging CSV =====
+        timestamp = time.time()
+        csv_writer.writerow([
+            f"{timestamp:.3f}",
+            frame_idx,
+            f"{eye_closed_vis:.4f}" if eye_closed_vis is not None else "",
+            f"{yawn_vis:.4f}" if yawn_vis is not None else "",
+            f"{drowsy_vis:.4f}" if drowsy_vis is not None else "",
+        ])
+
         # ===== Dibujar en pantalla =====
         y_offset = 30
 
-        if eye_prob is not None:
-            draw_bar(frame, 10, y_offset, eye_prob, (0, 0, 255), "Eyes Closed")
+        if eye_closed_vis is not None:
+            draw_bar(frame, 10, y_offset, eye_closed_vis, (0, 0, 255), "Eyes Closed")
             y_offset += 40
 
-        if yawn_prob is not None:
-            draw_bar(frame, 10, y_offset, yawn_prob, (255, 0, 0), "Yawning")
+        if yawn_vis is not None:
+            draw_bar(frame, 10, y_offset, yawn_vis, (255, 0, 0), "Yawning")
             y_offset += 40
 
-        if drowsy_prob is not None:
-            draw_bar(frame, 10, y_offset, drowsy_prob, (0, 255, 255), "Drowsy")
+        if drowsy_vis is not None:
+            draw_bar(frame, 10, y_offset, drowsy_vis, (0, 255, 255), "Drowsy")
             y_offset += 40
 
         # ===== FPS =====
@@ -158,6 +238,7 @@ def main():
             break
 
     cap.release()
+    csv_file.close()
     cv2.destroyAllWindows()
 
 

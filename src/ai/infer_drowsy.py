@@ -21,8 +21,9 @@ class DrowsyInfer:
         # Construir modelo
         self.model = build_model(num_classes=2).to(self.device)
 
-        # Cargar pesos
-        self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+        # Cargar pesos (sólo state_dict) de forma segura
+        state_dict = torch.load(model_path, map_location=self.device, weights_only=True)
+        self.model.load_state_dict(state_dict)
         self.model.eval()
 
         # Transformaciones

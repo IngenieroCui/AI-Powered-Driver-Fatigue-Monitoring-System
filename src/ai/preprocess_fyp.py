@@ -3,7 +3,21 @@ import shutil
 from pathlib import Path
 import random
 
-SOURCE_DIR = "fyp/train"
+"""Preprocesado del dataset FYP.
+
+Se asume que se ejecuta **desde la raíz del proyecto**, tal y como indica
+`ejecutar.md`, con la siguiente estructura de carpetas:
+
+data/
+├── fyp/
+│   └── train/
+│       ├── Open_Eyes/
+│       └── Closed_Eyes/
+
+Por eso, las rutas se definen relativas a la raíz del proyecto (`data/...`).
+"""
+
+SOURCE_DIR = "data/fyp/train"  # Antes era "fyp/train", lo que fallaba al ejecutar desde la raíz
 OUT_DIR = "data/fyp_processed"
 TRAIN_SPLIT = 0.8
 

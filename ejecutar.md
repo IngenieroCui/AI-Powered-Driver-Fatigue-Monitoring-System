@@ -163,7 +163,7 @@ python src/ai/train_eye.py
 Esto debe guardar un archivo de pesos en:
 
 ```text
-models/eye_cnn.pt
+src/models/eye_cnn.pt
 ```
 
 2. **Entrenar modelo de bostezo (yawn CNN)**
@@ -175,7 +175,7 @@ python src/ai/train_yawn.py
 Debería generar:
 
 ```text
-models/yawn_cnn.pt
+src/models/yawn_cnn.pt
 ```
 
 3. **Entrenar modelo de somnolencia global (drowsy CNN)**
@@ -187,7 +187,7 @@ python src/ai/train_drowsy.py
 Debería generar:
 
 ```text
-models/drowsy_cnn.pt
+src/models/drowsy_cnn.pt
 ```
 
 ### 1.4. Ejecutar los modos Classic y AI

@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 import torch
 import torch.nn as nn
@@ -6,6 +7,12 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from PIL import Image
 from tqdm import tqdm
+
+# Asegurar que la raíz del proyecto esté en sys.path
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 # === IMPORTAR TU MODELO ===
 from src.models.mobilenet_fatigue import build_model
@@ -52,18 +59,30 @@ def train_yawn_model():
 
     TRAIN_DIR = "data/yawdd/train"
     VAL_DIR = "data/yawdd/val"
-    SAVE_PATH = "models/yawn_cnn.pt"
+    SAVE_PATH = "src/models/yawn_cnn.pt"
 
     # Crear carpetas si no existen
-    os.makedirs("models", exist_ok=True)
+    os.makedirs(os.path.dirname(SAVE_PATH), exist_ok=True)
 
     print("\n=== Cargando dataset YAWDD Yawn ===")
 
     train_ds = YawnDataset(TRAIN_DIR)
     val_ds = YawnDataset(VAL_DIR)
 
-    train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=32, shuffle=False)
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=32,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=32,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True,
+    )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Entrenando en: {device}")
@@ -77,6 +96,10 @@ def train_yawn_model():
 
     EPOCHS = 10
 
+    # Configurar AMP sólo si hay CUDA y la API está disponible
+    use_amp = (device == "cuda") and hasattr(torch.cuda, "amp")
+    scaler = torch.cuda.amp.GradScaler() if use_amp else None
+
     for epoch in range(EPOCHS):
         print(f"\n=== Epoch {epoch+1}/{EPOCHS} ===")
 
@@ -85,14 +108,25 @@ def train_yawn_model():
         total_loss = 0
         correct = 0
 
-        for imgs, labels in tqdm(train_loader, desc="Entrenando"):
-            imgs, labels = imgs.to(device), torch.tensor(labels).to(device)
+        for imgs, labels in tqdm(train_loader, desc=f"[Train] Epoch {epoch+1}/{EPOCHS}"):
+            imgs = imgs.to(device, non_blocking=True)
+            labels = torch.as_tensor(labels, device=device)
 
-            optimizer.zero_grad()
-            outputs = model(imgs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+
+            if use_amp:
+                with torch.cuda.amp.autocast():
+                    outputs = model(imgs)
+                    loss = criterion(outputs, labels)
+
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                outputs = model(imgs)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
 
             total_loss += loss.item()
             correct += (outputs.argmax(1) == labels).sum().item()
@@ -106,8 +140,9 @@ def train_yawn_model():
         val_loss_total = 0
 
         with torch.no_grad():
-            for imgs, labels in tqdm(val_loader, desc="Validando"):
-                imgs, labels = imgs.to(device), torch.tensor(labels).to(device)
+            for imgs, labels in tqdm(val_loader, desc=f"[Val]   Epoch {epoch+1}/{EPOCHS}"):
+                imgs = imgs.to(device, non_blocking=True)
+                labels = torch.as_tensor(labels, device=device)
 
                 outputs = model(imgs)
                 loss = criterion(outputs, labels)

@@ -6,21 +6,36 @@ import mediapipe as mp
 from tqdm import tqdm
 import numpy as np
 import csv
+from multiprocessing import Pool, cpu_count
 
 # === CONFIG ===
 YAWDD_ROOT = "data/yawdd"
 OUTPUT_RAW = "data/yawdd_frames/raw"
 OUTPUT_DATASET = "data/yawdd"
-FRAME_EVERY = 5
+FRAME_EVERY = 10  # antes 5; usamos menos frames para acelerar el preprocesado
 TRAIN_SPLIT = 0.8
 MAR_THRESHOLD = 0.65  # si dash video no tiene etiqueta explicita
 
-mp_face = mp.solutions.face_mesh.FaceMesh(
-    max_num_faces=1,
-    refine_landmarks=True,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
-)
+# Para evitar problemas con multiprocessing y estados globales,
+# inicializaremos FaceMesh dentro de cada proceso trabajador.
+mp_face = None
+
+
+def get_face_mesh():
+    """Inicializa (una vez por proceso) la instancia de FaceMesh.
+
+    Esto permite usar multiproceso sin compartir estados internos de MediaPipe
+    entre procesos, lo que podra causar errores o cuellos de botella.
+    """
+    global mp_face
+    if mp_face is None:
+        mp_face = mp.solutions.face_mesh.FaceMesh(
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+    return mp_face
 
 # Landmarks for MAR
 MOUTH_TOP = [13, 14]
@@ -56,21 +71,35 @@ def compute_MAR(lm, w, h):
 
 
 def guess_label(video_name, mar):
+    """Asignar etiqueta yawn/no_yawn usando nombre del video y MAR.
+
+    Reglas clave:
+    - Cualquier video con "talking" en el nombre SIEMPRE es no_yawn, aunque abra la boca.
+    - Videos con "normal" tambi
+n se consideran no_yawn.
+    - Videos con "yawning" se marcan como yawn independientemente del MAR.
+    - Solo los videos sin etiqueta explcita (p.ej. DASH) usan la heurstica de MAR.
+    """
+
     name = video_name.lower()
 
+    # Casos con etiqueta explcita en el nombre del archivo
     if "yawning" in name:
         return "yawn"
-    if "normal" in name or "talking" in name:
+
+    # IMPORTANTE: talking SIEMPRE es no_yawn (aunque MAR sea alto)
+    if "talking" in name or "normal" in name:
         return "no_yawn"
 
-    # DASH VIDEOS → Heurística con MAR
+    # DASH VIDEOS  Heurstica con MAR solo cuando no hay etiqueta en el nombre
     return "yawn" if mar > MAR_THRESHOLD else "no_yawn"
 
 
 def extract_mouth_region_and_mar(frame_bgr):
     h, w, _ = frame_bgr.shape
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    res = mp_face.process(rgb)
+    face_mesh = get_face_mesh()
+    res = face_mesh.process(rgb)
 
     if not res.multi_face_landmarks:
         return None, None
@@ -97,7 +126,14 @@ def extract_mouth_region_and_mar(frame_bgr):
     return crop, mar
 
 
-def extract_frames_from_video(video_path, out_list, csv_writer):
+def process_single_video(video_path):
+    """Procesa un único video y devuelve la lista de (path, label, mar).
+
+    Pensado para ser usado con multiprocessing.Pool para aprovechar todos
+    los núcleos disponibles y acelerar el preprocesado.
+    """
+    items = []
+
     fname = os.path.basename(video_path)
     cap = cv2.VideoCapture(video_path)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -120,13 +156,13 @@ def extract_frames_from_video(video_path, out_list, csv_writer):
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         cv2.imwrite(out_path, crop)
 
-        out_list.append((out_path, label))
-        csv_writer.writerow([out_path, label, round(mar, 4)])
+        items.append((out_path, label, round(mar, 4)))
 
     cap.release()
+    return items
 
 
-def gather_all():
+def gather_all(num_workers=None):
     all_items = []
 
     folders = [
@@ -138,20 +174,41 @@ def gather_all():
 
     os.makedirs(OUTPUT_RAW, exist_ok=True)
 
+    # Construir lista de vídeos
+    all_videos = []
+    for folder in folders:
+        if not os.path.isdir(folder):
+            continue
+        vids = [os.path.join(folder, v) for v in os.listdir(folder)
+                if v.lower().endswith((".avi", ".mp4", ".mov"))]
+        all_videos.extend(vids)
+
+    if not all_videos:
+        print("No se encontraron videos YAWDD en las rutas configuradas.")
+        return []
+
+    # Elegir número de procesos
+    if num_workers is None:
+        num_workers = max(1, cpu_count() - 1)
+
+    print(f"Usando {num_workers} procesos para preprocesar YAWDD...")
+
+    # Procesamiento en paralelo
+    with Pool(processes=num_workers) as pool:
+        for video_items in tqdm(pool.imap_unordered(process_single_video, all_videos),
+                                total=len(all_videos),
+                                desc="Procesando videos YAWDD"):
+            all_items.extend(video_items)
+
+    # Guardar CSV de debug
     with open("data/yawdd_debug.csv", "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["path", "label", "mar"])
+        for path, label, mar in all_items:
+            writer.writerow([path, label, mar])
 
-        for folder in folders:
-            if not os.path.isdir(folder):
-                continue
-            vids = [os.path.join(folder, v) for v in os.listdir(folder)
-                    if v.lower().endswith((".avi", ".mp4", ".mov"))]
-
-            for v in tqdm(vids, desc=f"Procesando {folder}"):
-                extract_frames_from_video(v, all_items, writer)
-
-    return all_items
+    # Devolver sólo (path, label) para el split
+    return [(path, label) for path, label, _ in all_items]
 
 
 def split_dataset(all_items):
@@ -170,9 +227,9 @@ def split_dataset(all_items):
     print(f"Val:   {len(val)}")
 
 
-def main():
+def main(num_workers=None):
     print("=== Extrayendo frames YAWDD (IA v2) ===")
-    items = gather_all()
+    items = gather_all(num_workers=num_workers)
 
     print("=== Dividiendo train/val ===")
     split_dataset(items)
@@ -182,4 +239,5 @@ def main():
     print("Mira el debug en data/yawdd_debug.csv")
 
 if __name__ == "__main__":
+    # Llamada por defecto usando todos los cores menos uno para no saturar la máquina
     main()
