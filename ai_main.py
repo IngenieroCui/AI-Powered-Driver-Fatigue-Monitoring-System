@@ -54,6 +54,48 @@ def crop_region(frame, lm, points, margin=10):
     return crop
 
 
+def crop_mouth_region(frame, lm, mouth_points, extra_scale=2.0):
+        """Recorte robusto de la región de la boca.
+
+        - Calcula el bounding box mínimo de los landmarks de la boca.
+        - Lo expande en ancho/alto con un factor `extra_scale` para capturar
+            mejor la boca incluso si la cabeza está algo girada.
+        - Asegura una relación de aspecto más cuadrada para parecerse al
+            tipo de recorte usado al entrenar (región de boca + algo de mejilla/mentón).
+        """
+        h, w, _ = frame.shape
+
+        xs = [lm.landmark[p].x * w for p in mouth_points]
+        ys = [lm.landmark[p].y * h for p in mouth_points]
+
+        x_min, x_max = min(xs), max(xs)
+        y_min, y_max = min(ys), max(ys)
+
+        cx = (x_min + x_max) * 0.5
+        cy = (y_min + y_max) * 0.5
+
+        bw = (x_max - x_min)
+        bh = (y_max - y_min)
+
+        # Hacer la caja algo más alta para incluir mentón y parte de nariz
+        size = max(bw, bh) * extra_scale
+
+        x1 = int(cx - size / 2)
+        x2 = int(cx + size / 2)
+        y1 = int(cy - size / 2)
+        y2 = int(cy + size / 2)
+
+        x1 = max(x1, 0)
+        y1 = max(y1, 0)
+        x2 = min(x2, w)
+        y2 = min(y2, h)
+
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+                return None
+        return crop
+
+
 # -------------------------------
 # Regiones (landmarks MediaPipe)
 # -------------------------------
@@ -132,7 +174,8 @@ def main():
             # ===== Recortes =====
             left_eye_crop = crop_region(frame, lm, LEFT_EYE)
             right_eye_crop = crop_region(frame, lm, RIGHT_EYE)
-            mouth_crop = crop_region(frame, lm, MOUTH)
+            # Recorte de boca con caja grande y casi cuadrada para mayor robustez
+            mouth_crop = crop_mouth_region(frame, lm, MOUTH, extra_scale=2.0)
             face_crop = crop_region(frame, lm, FACE, margin=20)
 
             # ===== IA: ojos =====
@@ -181,23 +224,31 @@ def main():
         else:
             eye_closed_vis = None
 
-        # bostezo: forzar a [0,1] y aplicar ligera ganancia para que sea más visible
+        # bostezo: forzar a [0,1] y aplicar ganancia fuerte para romper la zona muerta
         def clamp01(v):
             return max(0.0, min(1.0, float(v)))
 
         if yawn_smooth is not None:
-            yawn_vis = clamp01(yawn_smooth * 1.2)  # hacer más sensible
+            # centrar alrededor de 0.2 y amplificar
+            # si el modelo da valores bajos pero sube un poco al bostezar,
+            # esta transformación vuelve visible ese cambio
+            boosted = (yawn_smooth - 0.1) * 4.0
+            yawn_vis = clamp01(boosted)
         else:
             yawn_vis = None
 
-        # drowsy: combinamos la salida del modelo con señales de ojos y bostezo
-        # idea: si hay más bostezo y ojos cerrados, aumentar drowsy
-        base_drowsy = drowsy_smooth if drowsy_smooth is not None else 0.0
+        # drowsy: damos más peso a ojos y bostezo, y menos al modelo
+        # si bostezas o tienes los ojos cerrados, drowsy debe subir
+        base_drowsy = drowsy_smooth if drowsy_smooth is not None else 0.5
         eye_component = eye_closed_vis if eye_closed_vis is not None else 0.0
         yawn_component = yawn_vis if yawn_vis is not None else 0.0
 
-        # mezcla lineal simple
-        combined_drowsy = 0.5 * base_drowsy + 0.25 * eye_component + 0.25 * yawn_component
+        # mezcla: 20% modelo, 40% ojos cerrados, 40% bostezo
+        combined_drowsy = 0.2 * base_drowsy + 0.4 * eye_component + 0.4 * yawn_component
+
+        # estirar un poco el contraste alrededor de 0.5
+        combined_drowsy = (combined_drowsy - 0.5) * 1.5 + 0.5
+
         drowsy_vis = clamp01(combined_drowsy) if drowsy_hist else None
 
         # ===== logging CSV =====
